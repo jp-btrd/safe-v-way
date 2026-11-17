@@ -26,7 +26,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 // Dashed circle = the pilot area covered by the demo
-L.circle(CENTER, { radius: RADIUS_M, color: "#555", weight: 1, dashArray: "6 6", fill: false }).addTo(map);
+L.circle(CENTER, { radius: RADIUS_M, color: "#4A5866", weight: 1.5, dashArray: "6 6", fill: false }).addTo(map);
 
 // Separate layer groups so we can wipe and redraw each kind of thing independently
 const zoneLayer = L.layerGroup().addTo(map);
@@ -51,8 +51,8 @@ function esc(text) {
 }
 
 function zoneStatusText(z) {
-  if (z.is_full) return "MARKED FULL";
-  if (!z.is_open) return "NO SPACE LEFT";
+  if (z.is_full) return "Marked full";
+  if (!z.is_open) return "No space left";
   return `${z.remaining} of ${z.capacity} spaces left`;
 }
 
@@ -93,7 +93,7 @@ function renderBlocked(blocked) {
   blockedLayer.clearLayers();
   blocked.forEach((b) => {
     if (!b.path || b.path.length < 2) return;
-    L.polyline(b.path, { color: "#d93025", weight: 7, opacity: 0.9 })
+    L.polyline(b.path, { color: "#C4161C", weight: 7, opacity: 0.9 })
       .bindPopup("Blocked street. Not passable.")
       .addTo(blockedLayer);
     // Put a red X at the middle of the blocked piece
@@ -118,7 +118,7 @@ async function requestRoute(latlng, isUpdate) {
 
     // "You are here" marker
     L.circleMarker([latlng.lat, latlng.lng], {
-      radius: 8, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1,
+      radius: 8, color: "#fff", weight: 3, fillColor: "#0B5CAD", fillOpacity: 1,
     }).addTo(routeLayer);
 
     if (!data.ok) {                       // no route / tapped too far from a street
@@ -128,12 +128,12 @@ async function requestRoute(latlng, isUpdate) {
     }
 
     // The blue walking route
-    const line = L.polyline(data.path, { color: "#1a73e8", weight: 6, opacity: 0.9 }).addTo(routeLayer);
+    const line = L.polyline(data.path, { color: "#0B5CAD", weight: 6, opacity: 0.9 }).addTo(routeLayer);
 
     // Dashed grey bits: from the tap to the street, and from the street end to the building
-    L.polyline([[latlng.lat, latlng.lng], data.start_snap], { color: "#6b7280", weight: 3, dashArray: "4 6" }).addTo(routeLayer);
+    L.polyline([[latlng.lat, latlng.lng], data.start_snap], { color: "#4A5866", weight: 3, dashArray: "4 6" }).addTo(routeLayer);
     const last = data.path[data.path.length - 1];
-    L.polyline([last, [data.zone.lat, data.zone.lon]], { color: "#6b7280", weight: 3, dashArray: "4 6" }).addTo(routeLayer);
+    L.polyline([last, [data.zone.lat, data.zone.lon]], { color: "#4A5866", weight: 3, dashArray: "4 6" }).addTo(routeLayer);
 
     // Did the route change because of an update? Tell the resident.
     const key = `${data.zone.id}|${data.distance_m}`;
@@ -229,7 +229,7 @@ function onPhotoPicked(ev) {
 function showToast(text, isError) {
   const t = $("toast");
   t.textContent = text;
-  t.style.background = isError ? "#d93025" : "#1e8e3e";
+  t.style.background = isError ? "#C4161C" : "#0A7A4A";
   t.hidden = false;
   setTimeout(() => { t.hidden = true; }, 4000);
 }

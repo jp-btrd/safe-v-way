@@ -26,7 +26,7 @@ function esc(text) {
 function showToast(text, isError) {
   const t = $("toast");
   t.textContent = text;
-  t.style.background = isError ? "#d93025" : "#1e8e3e";
+  t.style.background = isError ? "#C4161C" : "#0A7A4A";
   t.style.top = "56px";
   t.hidden = false;
   setTimeout(() => { t.hidden = true; }, 3500);
@@ -92,9 +92,9 @@ $("logout-btn").addEventListener("click", async () => {
 
 // ---------- Draw safe zones ----------
 function zoneStateText(z) {
-  if (z.is_full) return "MARKED FULL";
-  if (!z.is_open) return "NO SPACE LEFT";
-  return "OPEN";
+  if (z.is_full) return "Marked full";
+  if (!z.is_open) return "No space left";
+  return "Open";
 }
 
 function renderZones(zones) {
@@ -103,8 +103,7 @@ function renderZones(zones) {
     return `
       <div class="card ${z.is_open ? "open" : "closed"}">
         <h3>${esc(z.name)}</h3>
-        <div class="meta">${esc(zoneStateText(z))} &middot; ${z.occupancy} of ${z.capacity} occupied
-          &middot; ${z.remaining} spaces left</div>
+        <div class="meta">${esc(zoneStateText(z))}. ${z.occupancy} of ${z.capacity} occupied, ${z.remaining} spaces left.</div>
         <div class="bar"><div style="width:${pct}%"></div></div>
         <div class="btn-row">
           <button data-zone="${z.id}" data-delta="-10">-10</button>
@@ -112,7 +111,7 @@ function renderZones(zones) {
           <button data-zone="${z.id}" data-delta="1">+1</button>
           <button data-zone="${z.id}" data-delta="10">+10</button>
           <button data-zone="${z.id}" data-full="${!z.is_full}" class="${z.is_full ? "primary" : "danger"}">
-            ${z.is_full ? "Reopen zone" : "Mark as FULL"}
+            ${z.is_full ? "Reopen zone" : "Mark as full"}
           </button>
         </div>
       </div>`;
@@ -148,7 +147,7 @@ function reportCard(r) {
     return `
       <div class="card pending">
         <h3>Report #${r.id}</h3>
-        <div class="meta">${esc(when)} &middot; ${r.lat}, ${r.lon}</div>
+        <div class="meta">${esc(when)}. ${r.lat}, ${r.lon}</div>
         ${photo}
         <p>${esc(r.description)}</p>
         <div class="btn-row">
@@ -160,8 +159,8 @@ function reportCard(r) {
   }
   return `
     <div class="card">
-      <h3>Report #${r.id} <span class="status-pill ${esc(r.status)}">${esc(r.status.toUpperCase())}</span></h3>
-      <div class="meta">${esc(when)} &middot; ${r.lat}, ${r.lon}</div>
+      <h3>Report #${r.id} <span class="status-pill ${esc(r.status)}">${esc(r.status)}</span></h3>
+      <div class="meta">${esc(when)}. ${r.lat}, ${r.lon}</div>
       <p>${esc(r.description)}</p>
     </div>`;
 }
@@ -240,7 +239,7 @@ function renderBlocked(list) {
     ? list.map((b) => `
         <div class="card closed">
           <h3>${esc(b.name || "Unnamed alley / path")}</h3>
-          <div class="meta">Street piece ${b.u} &ndash; ${b.v}</div>
+          <div class="meta">Street piece ${b.u} to ${b.v}</div>
           <div class="btn-row"><button data-u="${b.u}" data-v="${b.v}">Unblock</button></div>
         </div>`).join("")
     : '<p class="empty">No blocked streets.</p>';
@@ -269,7 +268,7 @@ function openBlockModal(reportId) {
   $("block-desc").textContent = `Report #${bReport.id}: ${bReport.description}`;
   $("block-photo").hidden = !bReport.photo;
   if (bReport.photo) $("block-photo").src = "/uploads/" + bReport.photo;
-  $("block-info").textContent = "Tap the map on the alley or street you want to block. The orange pin is where the resident reported it.";
+  $("block-info").textContent = "Tap the map on the alley or street you want to block. The yellow dot is where the resident reported it.";
   $("block-confirm").disabled = true;
   $("block-modal").hidden = false;
 
@@ -291,12 +290,12 @@ async function drawBlockMap() {
   // already blocked streets (red)
   try {
     const s = await fetch("/api/state", { cache: "no-store" }).then((r) => r.json());
-    s.blocked.forEach((b) => L.polyline(b.path, { color: "#d93025", weight: 7, opacity: 0.8 }).addTo(bLayers));
+    s.blocked.forEach((b) => L.polyline(b.path, { color: "#C4161C", weight: 7, opacity: 0.8 }).addTo(bLayers));
   } catch (err) { /* map still works without this layer */ }
   // where the resident reported it
-  L.circleMarker([bReport.lat, bReport.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#e8710a", fillOpacity: 1 }).addTo(bLayers);
+  L.circleMarker([bReport.lat, bReport.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#F4B000", fillOpacity: 1 }).addTo(bLayers);
   // the street piece the admin's click snapped to (orange, thick)
-  if (bSnap) L.polyline(bSnap.path, { color: "#e8710a", weight: 10, opacity: 0.9 }).addTo(bLayers);
+  if (bSnap) L.polyline(bSnap.path, { color: "#F4B000", weight: 10, opacity: 0.9 }).addTo(bLayers);
 }
 
 async function onBlockMapClick(e) {
