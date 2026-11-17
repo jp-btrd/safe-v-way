@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Safe V-Way Admin</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="admin">
+
+  <header class="admin-top">
+    <span class="brand">Safe V-Way &middot; Admin</span>
+    <span id="conn" class="conn"></span>
+    <button id="logout-btn" type="button" hidden>Log out</button>
+  </header>
+
+  <!-- LOGIN (shown until the password is accepted) -->
+  <main id="login-view" class="admin-wrap" hidden>
+    <form id="login-form" class="card">
+      <h2>Admin login</h2>
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password">
+      <p id="login-error" class="form-error" hidden></p>
+      <button type="submit">Log in</button>
+    </form>
+  </main>
+
+  <!-- DASHBOARD (shown after login) -->
+  <main id="dash-view" class="admin-wrap" hidden>
+
+    <h2>Safe zones</h2>
+    <div id="zones"></div>
+
+    <h2>Pending reports <span id="pending-count" class="badge">0</span></h2>
+    <div id="pending"></div>
+
+    <h2>Blocked streets</h2>
+    <div id="blocked"></div>
+
+    <h2>Reviewed reports</h2>
+    <div id="reviewed"></div>
+  </main>
+
+    <!-- Full-screen map used after "Approve and block street" -->
+  <div id="block-modal" hidden>
+    <div id="block-top">
+      <b>Approve and block a street</b>
+      <p id="block-desc" class="meta"></p>
+      <img id="block-photo" class="block-photo" alt="" hidden>
+    </div>
+    <div id="block-map"></div>
+    <div id="block-bottom">
+      <p id="block-info"></p>
+      <div class="btn-row">
+        <button id="block-confirm" type="button" class="danger" disabled>Approve &amp; block this street</button>
+        <button id="block-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

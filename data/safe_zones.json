@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "name": "Tañada Covered Court",
+    "lat": 14.682806,
+    "lon": 120.988062,
+    "capacity": 150,
+    "occupancy": 40,
+    "is_full": false
+  },
+  {
+    "id": 2,
+    "name": "Gen. T. De Leon Elementary School",
+    "lat": 14.68608,
+    "lon": 120.992756,
+    "capacity": 300,
+    "occupancy": 120,
+    "is_full": false
+  }
+]

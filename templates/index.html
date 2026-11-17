@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Safe V-Way</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <header id="topbar">
+    <span class="brand">Safe V-Way</span>
+    <span class="sub">Gen. T. De Leon, Valenzuela</span>
+    <span id="status" class="status offline" title="Connection to server">
+      <span class="dot"></span><span id="status-text">connecting...</span>
+    </span>
+  </header>
+
+  <div id="map"></div>
+
+  <!-- NEW: button to start a hazard report -->
+  <button id="report-btn" type="button">&#9888; Report a hazard</button>
+
+  <!-- Routing panel (from Step 3) -->
+  <section id="panel" class="idle">
+    <h2 id="panel-title">Tap the map where you are</h2>
+    <p id="panel-detail">We will show the shortest walking route to the nearest safe zone that still has space.</p>
+    <p id="panel-note" class="note" hidden></p>
+    <button id="clear-btn" type="button" hidden>Clear route</button>
+  </section>
+
+  <!-- NEW: report sheet. Replaces the routing panel while the resident is reporting. -->
+  <section id="report-sheet" hidden>
+    <h2>Report a hazard</h2>
+    <p id="report-hint">Step 1: Tap the map to mark where the hazard is (for example, a blocked alley or a fire).</p>
+
+    <!-- The form only appears after the resident has picked a spot -->
+    <form id="report-form" hidden>
+      <label for="report-desc">What is happening here?</label>
+      <textarea id="report-desc" rows="3" maxlength="300"
+                placeholder="Example: Fallen post blocking the alley beside the sari-sari store"></textarea>
+
+            <label>Photo (optional)</label>
+      <div class="row">
+        <button type="button" id="photo-cam-btn" class="secondary">&#128247; Take photo</button>
+        <button type="button" id="photo-gal-btn" class="secondary">&#128444; Gallery</button>
+      </div>
+      <p id="photo-name" class="photo-name">No photo selected</p>
+      <!-- Hidden file inputs. The buttons above open them.
+           capture="environment" = open the back camera directly. -->
+      <input id="report-photo-cam" type="file" accept="image/*" capture="environment" hidden>
+      <input id="report-photo" type="file" accept="image/*" hidden>
+
+      <p id="report-error" class="form-error" hidden></p>
+
+      <div class="row">
+        <button type="submit" id="report-send">Send report</button>
+        <button type="button" id="report-cancel-2" class="secondary">Cancel</button>
+      </div>
+    </form>
+
+    <!-- Shown before a spot is picked -->
+    <button type="button" id="report-cancel-1" class="secondary">Cancel</button>
+  </section>
+
+  <div id="toast" hidden></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/js/resident.js"></script>
+</body>
+</html>
