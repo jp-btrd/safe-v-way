@@ -38,9 +38,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ---------- SETTINGS ----------
 WALK_SPEED_M_PER_S = 1.2      # assumed evacuation walking speed (about 72 m/min); an assumption, not measured
-MAX_SNAP_DISTANCE_M = 150     # if a click is farther than this from any mapped street, reject it
+MAX_SNAP_DISTANCE_M = 50000     # if a click is farther than this from any mapped street, reject it
 CENTER_LAT, CENTER_LON = 14.684443, 120.990409   # (lat, lon) center of the demo area
-REPORT_AREA_M = 700            # reports farther than this from the center are rejected
+REPORT_AREA_M = 2000            # reports farther than this from the center are rejected
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB hard limit per request
 MAX_DESCRIPTION_CHARS = 300
 
@@ -126,31 +126,28 @@ def zone_is_open(z):
 
 
 def edge_cost(u, v, edge_dict):
-    """
-    Tells NetworkX how 'expensive' it is to walk from u to v.
-      - blocked street piece -> None, which means 'pretend this street doesn't exist'
-      - otherwise            -> its length in meters
-    (OSMnx graphs can have several parallel edges between two nodes, so edge_dict
-     holds all of them; we take the shortest.)
-    """
     if (u, v) in blocked_set:
         return None
     return min(d.get("length", 1) for d in edge_dict.values())
 
-
-def find_best_route(start_node):
+def find_best_route(start_node, target_zone_id=None):
     """Try every OPEN safe zone; return the one with the shortest walk (or None)."""
     best = None
     for z in zones:
         if not zone_is_open(z):
-            continue                                   # full zones are skipped
+            continue
+        
+        # if target zone was specified, skip all others
+        if target_zone_id is not None and z["id"] != target_zone_id:
+            continue
+
         try:
             # Dijkstra's algorithm: the standard shortest-path method
             length, path = nx.single_source_dijkstra(
                 G, start_node, target=ZONE_NODES[z["id"]], weight=edge_cost
             )
         except nx.NetworkXNoPath:
-            continue                                   # blocked off from this zone
+            continue
         if best is None or length < best["length"]:
             best = {"zone": z, "length": length, "path": path}
     return best
@@ -188,17 +185,18 @@ def zone_public(z):
     return {**z, "remaining": max(z["capacity"] - z["occupancy"], 0), "is_open": zone_is_open(z)}
 
 
-def compute_route(lat, lon):
+def compute_route(lat, lon, target_zone_id=None):
     """Snap the click to the street network, then find the best open safe zone."""
     start_node = int(ox.distance.nearest_nodes(G, X=lon, Y=lat))     # X=lon, Y=lat
     n = G.nodes[start_node]
     snap = haversine_m(lat, lon, n["y"], n["x"])
 
-    if snap > MAX_SNAP_DISTANCE_M:
-        return {"ok": False, "error": "outside_area",
-                "message": "That spot is too far from any mapped street. Tap closer to a street inside the demo area."}, 422
+    # uncomment for limit
+    # if snap > MAX_SNAP_DISTANCE_M:
+    #     return {"ok": False, "error": "outside_area",
+    #             "message": "That spot is too far from any mapped street. Tap closer to a street inside the demo area."}, 422
 
-    best = find_best_route(start_node)
+    best = find_best_route(start_node, target_zone_id)
     if best is None:
         return {"ok": False, "error": "no_route",
                 "message": "No open safe zone can be reached from here right now."}, 404
@@ -274,10 +272,12 @@ def api_zones():
 def api_route():
     try:
         lat, lon = read_lat_lon()
+        target_zone_id = request.args.get("target_zone")
+        target_zone_id = int(target_zone_id) if target_zone_id else None
     except (KeyError, ValueError):
         return jsonify(BAD_REQUEST[0]), BAD_REQUEST[1]
     with lock:
-        result, status = compute_route(lat, lon)
+        result, status = compute_route(lat, lon, target_zone_id)
     return jsonify(result), status
 
 

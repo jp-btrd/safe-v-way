@@ -14,31 +14,33 @@
 
 // ---------- SETTINGS ----------
 const CENTER = [14.684443, 120.990409];   // [lat, lon] center of the demo area
-const RADIUS_M = 500;
+const RADIUS_M = 2000;
 const POLL_MS = 4000;                     // ask the server for updates every 4 seconds
 
 // ---------- MAP SETUP ----------
-const map = L.map("map").setView(CENTER, 17);
+//two separate maps: one for the map tab, one for the report tab
+let mainMap = null;
+let reportMap = null;
 
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: "&copy; OpenStreetMap contributors",
-}).addTo(map);
-
-// Dashed circle = the pilot area covered by the demo
-L.circle(CENTER, { radius: RADIUS_M, color: "#4A5866", weight: 1.5, dashArray: "6 6", fill: false }).addTo(map);
-
-// Separate layer groups so we can wipe and redraw each kind of thing independently
-const zoneLayer = L.layerGroup().addTo(map);
-const blockedLayer = L.layerGroup().addTo(map);
-const routeLayer = L.layerGroup().addTo(map);
-const reportLayer = L.layerGroup().addTo(map);   // the orange pin while reporting
+let zoneLayer, blockedLayer, routeLayer, reportLayer;
+let reportMarker = null;
+let startMarker = null;
 
 // ---------- STATE ----------
 let lastVersion = null;     // the server's version number the last time we looked
 let lastClick = null;       // where the resident last tapped, as {lat, lng}
+let lockedZoneId = null;
 let lastRouteKey = null;    // "zoneId|distance" of the route currently shown
 let requestCounter = 0;     // used to ignore slow, out-of-date answers
+let currentZones = []; // store zones for the home list
+let isMapViewOnly = false;
+let userGpsCoords = null;
+let isPickingLocation = false;
+
+// Report State
+let reportLatLng = null;
+let sending = false;
+let chosenPhoto = null;
 
 // ---------- SMALL HELPERS ----------
 const $ = (id) => document.getElementById(id);
@@ -46,7 +48,7 @@ const $ = (id) => document.getElementById(id);
 // Prevents text from the server being treated as HTML
 function esc(text) {
   const d = document.createElement("div");
-  d.textContent = text;
+  d.textContent = text == null ? "" : String(text);
   return d.innerHTML;
 }
 
@@ -63,7 +65,9 @@ function setStatus(online) {
 
 // Update the bottom panel. kind = "idle" | "ok" | "error"
 function setPanel(kind, title, detail, note) {
+  if (isMapViewOnly) return;
   $("panel").className = kind;
+  $("panel").hidden = false;
   $("panel-title").textContent = title;
   $("panel-detail").textContent = detail;
   $("panel-note").hidden = !note;
@@ -71,25 +75,202 @@ function setPanel(kind, title, detail, note) {
   $("clear-btn").hidden = kind === "idle";
 }
 
+function hidePanel() {
+  $("panel").hidden = true;
+}
+
+function showToast(text, isError) {
+  const t = $("toast");
+  t.textContent = text;
+  t.style.background = isError ? "#ff4147" : "#56da3b";
+  t.hidden = false;
+  setTimeout(() => { t.hidden = true; }, 4000);
+}
+
+// ---------- GEOLOCATION & NAVIGATION ----------
+function getCurrentLocation(callback) {
+  if (!navigator.geolocation) {
+    showToast("geoloc is not supported", true);
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userGpsCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      callback(userGpsCoords);
+    },
+    (err) => {
+      showToast("could not get location, using map center", true);
+      callback({ lat: CENTER[0], lng: CENTER[1] });
+    },
+    { enableHighAccuracy: true, timeout: 5000 }
+  );
+}
+
+function goToMapView(startLocation, zoneIdToLock = null, isViewOnly = false) {
+  isMapViewOnly = isViewOnly;
+  lockedZoneId = zoneIdToLock;
+  isPickingLocation = false;
+  
+  // update nav ui
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  const mapTabBtn = document.querySelector('[data-target="view-map"]');
+  if (mapTabBtn && !isViewOnly) mapTabBtn.classList.add('active');
+  
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-map').classList.add('active');
+
+  if (mainMap) {
+    setTimeout(() => mainMap.invalidateSize(), 50);
+  }
+
+  if (isViewOnly) {
+    hidePanel();
+    $("map-top-bar").style.display = "none";
+    if (routeLayer) routeLayer.clearLayers();
+    if (startMarker) mainMap.removeLayer(startMarker);
+    startMarker = null;
+  } else {
+    $("map-top-bar").style.display = "flex";
+    if (startLocation) {
+      lastClick = startLocation;
+      $("location-text").textContent = "Current Location";
+      updateStartMarker(startLocation);
+      setPanel("idle", "Finding your route...", "Wait.");
+      requestRoute(startLocation, false);
+    }
+  }
+}
+
+function updateStartMarker(latlng) {
+  if (!mainMap) return;
+  if (startMarker) mainMap.removeLayer(startMarker);
+  startMarker = L.circleMarker([latlng.lat, latlng.lng], {
+    radius: 8, color: "#fff", weight: 3, fillColor: "#0B5CAD", fillOpacity: 1,
+  }).addTo(mainMap);
+}
+
+$("btn-pick-location").addEventListener("click", () => {
+  if (isMapViewOnly) return;
+  isPickingLocation = !isPickingLocation;
+  if (isPickingLocation) {
+    showToast("Tap the map to set your starting location", false);
+    $("btn-pick-location").style.background = "var(--app-accent)";
+    $("btn-pick-location").querySelector("img").style.filter = "invert(1)";
+  } else {
+    $("btn-pick-location").style.background = "var(--white)";
+    $("btn-pick-location").querySelector("img").style.filter = "none";
+  }
+});
+
+window.promptChangeLocation = () => {
+  if (!lastClick) {
+    showToast("no current location to modify", true);
+    return;
+  }
+  const newLoc = prompt("Enter starting location or leave blank to tap the map:", `${lastClick.lat.toFixed(5)}, ${lastClick.lng.toFixed(5)}`);
+  if (!newLoc) return;
+  const parts = newLoc.split(",");
+  if (parts.length === 2) {
+    const lat = parseFloat(parts[0].trim());
+    const lng = parseFloat(parts[1].trim());
+    if (!isNaN(lat) && !isNaN(lng)) {
+      lastClick = { lat, lng };
+      $("location-text").textContent = "Custom Location";
+      updateStartMarker(lastClick);
+      requestRoute(lastClick, false);
+      mainMap.setView([lat, lng], 16);
+    } else {
+      showToast("Invalid format. Please use 'Lat, Lon'.", true);
+    }
+  }
+};
+
+$("btn-evacuate").addEventListener("click", () => {
+  getCurrentLocation((coords) => {
+    goToMapView(coords, null, false);
+  });
+});
+
+$("btn-back-home").addEventListener("click", () => {
+  document.querySelector('[data-target="view-home"]').click();
+});
+
+// ---------- NAVIGATION ----------
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    const target = btn.dataset.target;
+    if (!target) return;
+    
+    //upd ui
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const targetView = document.getElementById(target);
+    if(targetView) targetView.classList.add('active');
+
+    if (target === 'view-map') {
+      // opened via navbar
+      goToMapView(null, null, true); 
+    } else if (target === 'view-report') {
+      setTimeout(() => reportMap.invalidateSize(), 50);
+      hidePanel();
+      startReport();
+    } else if (target === 'view-home') {
+      isMapViewOnly = true; // disable routing if they go back
+      hidePanel();
+      if (mainMap) mainMap.invalidateSize();
+    }
+  });
+});
+
 // ---------- DRAW SAFE ZONES ----------
 function renderZones(zones) {
-  zoneLayer.clearLayers();
-  zones.forEach((z) => {
-    const icon = L.divIcon({
-      className: "",                                   // no default Leaflet icon styling
-      html: `<div class="zone-pin ${z.is_open ? "open" : "full"}">S</div>`,
-      iconSize: [30, 30],
-      iconAnchor: [15, 15],
+  currentZones = zones;
+  
+  // updating map
+  if (zoneLayer) {
+    zoneLayer.clearLayers();
+    zones.forEach((z) => {
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="zone-pin ${z.is_open ? "open" : "full"}">S</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+      const label = `<b>${esc(z.name)}</b><br>${esc(zoneStatusText(z))}`;
+      L.marker([z.lat, z.lon], { icon })
+        .bindTooltip(label, { permanent: true, direction: "top", offset: [0, -16], className: "zone-tip" })
+        .addTo(zoneLayer);
     });
-    const label = `<b>${esc(z.name)}</b><br>${esc(zoneStatusText(z))}`;
-    L.marker([z.lat, z.lon], { icon })
-      .bindTooltip(label, { permanent: true, direction: "top", offset: [0, -16], className: "zone-tip" })
-      .addTo(zoneLayer);
-  });
+  }
+// upd the list in home
+  const list = $('zone-list');
+  if (list) {
+    $('zone-count').textContent = zones.length;
+    list.innerHTML = zones.map(z => `
+      <div class="zone-card">
+        <div class="info">
+          <h3>${esc(z.name)}</h3>
+          <p>${esc(zoneStatusText(z))}</p>
+        </div>
+        <button class="btn-route" onclick="routeToZone(${z.id})">Route</button>
+      </div>
+    `).join('');
+  }
 }
+// used when clicking "route" on a zone card
+window.routeToZone = (zoneId) => {
+  const z = currentZones.find(z => z.id === zoneId);
+  if (!z) return;
+  getCurrentLocation((coords) => {
+    goToMapView(coords, zoneId, false);
+  });
+};
 
 // ---------- DRAW BLOCKED STREETS ----------
 function renderBlocked(blocked) {
+  if (!blockedLayer) return;
   blockedLayer.clearLayers();
   blocked.forEach((b) => {
     if (!b.path || b.path.length < 2) return;
@@ -108,18 +289,18 @@ function renderBlocked(blocked) {
 // ---------- ROUTING ----------
 // isUpdate = true when we are re-checking because the server data changed
 async function requestRoute(latlng, isUpdate) {
+  if (isMapViewOnly) return;
   const myId = ++requestCounter;       // if the resident taps again, older answers are ignored
   try {
-    const res = await fetch(`/api/route?lat=${latlng.lat}&lon=${latlng.lng}`, { cache: "no-store" });
+    let url = `/api/route?lat=${latlng.lat}&lon=${latlng.lng}`;
+    if (lockedZoneId) url += `&target_zone=${lockedZoneId}`;
+    
+    const res = await fetch(url, { cache: "no-store" });
     const data = await res.json();
     if (myId !== requestCounter) return;
-
+    if (!mainMap) return;
     routeLayer.clearLayers();
-
-    // "You are here" marker
-    L.circleMarker([latlng.lat, latlng.lng], {
-      radius: 8, color: "#fff", weight: 3, fillColor: "#0B5CAD", fillOpacity: 1,
-    }).addTo(routeLayer);
+    updateStartMarker(latlng);
 
     if (!data.ok) {                       // no route / tapped too far from a street
       lastRouteKey = null;
@@ -153,8 +334,8 @@ async function requestRoute(latlng, isUpdate) {
     // Zoom to fit the route only when the resident taps (not during background updates,
     // which would make the map jump around while they are looking at it)
     if (!isUpdate) {
-      map.fitBounds(line.getBounds().extend([data.zone.lat, data.zone.lon]).extend([latlng.lat, latlng.lng]), {
-        paddingTopLeft: [20, 20],
+      mainMap.fitBounds(line.getBounds().extend([data.zone.lat, data.zone.lon]).extend([latlng.lat, latlng.lng]), {
+        paddingTopLeft: [20, 80],
         paddingBottomRight: [20, 190],     // leave room for the bottom panel
         maxZoom: 18,
       });
@@ -165,26 +346,12 @@ async function requestRoute(latlng, isUpdate) {
   }
 }
 
-// When the resident taps the map.
-// Two modes: normal (find a route) or reporting (choose the hazard's location).
-let reportMode = false;
-
-map.on("click", (e) => {
-  if (reportMode) {
-    setReportSpot(e.latlng);
-    return;
-  }
-  lastClick = e.latlng;
-  setPanel("idle", "Finding your route...", "One moment.");
-  $("clear-btn").hidden = false;
-  requestRoute(e.latlng, false);
-});
-
 $("clear-btn").addEventListener("click", () => {
   requestCounter++;                 // ignore any answer still on its way
   lastClick = null;
   lastRouteKey = null;
-  routeLayer.clearLayers();
+  if (routeLayer) routeLayer.clearLayers();
+  if (startMarker) mainMap.removeLayer(startMarker);
   setPanel("idle", "Tap the map where you are", "We will show the shortest walking route to the nearest safe zone that still has space.");
 });
 
@@ -202,23 +369,18 @@ async function poll() {
       lastVersion = s.version;
       renderZones(s.zones);
       renderBlocked(s.blocked);
-      // If the resident already has a route on screen, recalculate it
-      if (!firstLoad && lastClick) requestRoute(lastClick, true);
+      if (!firstLoad && lastClick && !isMapViewOnly) requestRoute(lastClick, true);
     }
   } catch (err) {
     setStatus(false);               // server unreachable; we just try again next time
   }
 }
 
-poll();                              // once right away
-setInterval(poll, POLL_MS);          // then every few seconds
+// poll();                              // once right away
+// setInterval(poll, POLL_MS);          // then every few seconds
 // =====================================================================
 // REPORT A HAZARD (Step 4)
 // =====================================================================
-let reportLatLng = null;       // the spot the resident chose, as {lat, lng}
-let sending = false;           // blocks double-taps on "Send"
-let chosenPhoto = null;        // the photo file the resident picked (camera or gallery)
-
 function onPhotoPicked(ev) {
   const f = ev.target.files[0];
   if (!f) return;
@@ -226,48 +388,50 @@ function onPhotoPicked(ev) {
   $("photo-name").textContent = "Photo selected: " + f.name;
 }
 
-function showToast(text, isError) {
-  const t = $("toast");
-  t.textContent = text;
-  t.style.background = isError ? "#C4161C" : "#0A7A4A";
-  t.hidden = false;
-  setTimeout(() => { t.hidden = true; }, 4000);
-}
-
 function startReport() {
-  reportMode = true;
+  // reportMode = true;
   reportLatLng = null;
-  reportLayer.clearLayers();
+
+  if (reportLayer) reportLayer.clearLayers();
+  if (reportMarker && reportMap) {
+    reportMap.removeLayer(reportMarker);
+    reportMarker = null;
+  }
+  
   $("report-form").reset();
     chosenPhoto = null;
   $("photo-name").textContent = "No photo selected";
   $("report-form").hidden = true;          // form appears after the spot is chosen
   $("report-cancel-1").hidden = false;
   $("report-error").hidden = true;
-  $("report-hint").textContent =
-    "Step 1: Tap the map to mark where the hazard is (for example, a blocked alley or a fire).";
-  $("panel").hidden = true;                // hide the routing panel
-  $("report-btn").hidden = true;
-  $("report-sheet").hidden = false;
+  $("report-hint").textContent = "Getting your current location...";
+  getCurrentLocation((coords) => {
+    userGpsCoords = coords;
+    if (reportMap) reportMap.setView([coords.lat, coords.lng], 17);
+    $("report-hint").textContent = "Step 1: Tap the map to mark where the hazard is (fire or obstruction).";
+    if (reportMap) {
+      L.circle(CENTER, { radius: RADIUS_M, color: "#4A5866", weight: 1.5, dashArray: "6 6", fill: false }).addTo(reportMap);
+    }
+  });
 }
 
 function endReport() {
-  reportMode = false;
-  reportLatLng = null;
-  reportLayer.clearLayers();
-  $("report-sheet").hidden = true;
-  $("panel").hidden = false;
-  $("report-btn").hidden = false;
+  // switch back to home
+  document.querySelector('[data-target="view-home"]').click();
+  startReport(); // reset form
 }
 
 // Called when the resident taps the map in reporting mode
 function setReportSpot(latlng) {
   reportLatLng = latlng;
-  reportLayer.clearLayers();
-  L.marker([latlng.lat, latlng.lng], {
-    icon: L.divIcon({ className: "", html: '<div class="report-pin">!</div>', iconSize: [28, 28], iconAnchor: [14, 14] }),
-    interactive: false,
-  }).addTo(reportLayer);
+  if (reportMarker && reportMap) reportMap.removeLayer(reportMarker);
+  
+  if (reportMap) {
+    reportMarker = L.marker([latlng.lat, latlng.lng], {
+      icon: L.divIcon({ className: "", html: '<div class="report-pin">!</div>', iconSize: [28, 28], iconAnchor: [14, 14] }),
+      interactive: false,
+    }).addTo(reportMap);
+  }
 
   $("report-hint").textContent = "Step 2: Describe the hazard. Tap the map again to move the pin.";
   $("report-form").hidden = false;
@@ -316,6 +480,13 @@ async function submitReport(ev) {
     fd.append("lat", reportLatLng.lat);
     fd.append("lon", reportLatLng.lng);    // Leaflet calls longitude "lng"; our API calls it "lon"
     fd.append("description", desc);
+    if (userGpsCoords) {
+      fd.append("user_lat", userGpsCoords.lat);
+      fd.append("user_lon", userGpsCoords.lng);
+    }
+
+    const type = document.querySelector('input[name="report-type"]:checked').value;
+    fd.append("type", type);
 
     if (chosenPhoto) fd.append("photo", await shrinkImage(chosenPhoto), "photo.jpg");
 
@@ -323,8 +494,8 @@ async function submitReport(ev) {
     const data = await res.json();
 
     if (data.ok) {
-      endReport();
-      showToast("Report sent. An admin will review it.", false);
+      showToast("Report sent. Routing to nearest safe zone...", false);
+      goToMapView(userGpsCoords, null, false);
     } else {
       showReportError(data.message || "Could not send the report.");
     }
@@ -337,13 +508,54 @@ async function submitReport(ev) {
   }
 }
 
-$("report-btn").addEventListener("click", startReport);
+// ---------- INITIALIZATION ----------
+function initMaps() {
+  // main map
+  mainMap = L.map("map", { zoomControl: false }).setView(CENTER, 17);
+  L.control.zoom({ position: 'bottomright' }).addTo(mainMap);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(mainMap);
+  L.circle(CENTER, { radius: RADIUS_M, color: "#4A5866", weight: 1.5, dashArray: "6 6", fill: false }).addTo(mainMap);
+  
+  zoneLayer = L.layerGroup().addTo(mainMap);
+  blockedLayer = L.layerGroup().addTo(mainMap);
+  routeLayer = L.layerGroup().addTo(mainMap);
+
+  mainMap.on("click", (e) => {
+    if (isMapViewOnly) return;
+    if (!isPickingLocation) return; 
+        
+    isPickingLocation = false;
+    $("btn-pick-location").style.background = "var(--white)";
+    $("btn-pick-location").querySelector("img").style.filter = "none";
+
+    lastClick = e.latlng;
+    $("location-text").textContent = "Custom Location";
+    updateStartMarker(e.latlng);
+    setPanel("idle", "Finding your route...", "One moment.");
+    requestRoute(e.latlng, false);
+  });
+
+  // report map
+  reportMap = L.map("report-map").setView(CENTER, 18);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(reportMap);
+  reportLayer = L.layerGroup().addTo(reportMap);
+
+  reportMap.on("click", (e) => {
+    setReportSpot(e.latlng);
+  });
+}
+
+// $("report-btn").addEventListener("click", startReport);
 $("report-cancel-1").addEventListener("click", endReport);
 $("report-cancel-2").addEventListener("click", endReport);
 $("report-form").addEventListener("submit", submitReport);
 
 // Photo buttons: each one opens its hidden file input
 $("photo-cam-btn").addEventListener("click", () => $("report-photo-cam").click());
-$("photo-gal-btn").addEventListener("click", () => $("report-photo").click());
 $("report-photo-cam").addEventListener("change", onPhotoPicked);
-$("report-photo").addEventListener("change", onPhotoPicked);
+// $("report-photo").addEventListener("change", onPhotoPicked);
+
+// Start everything up
+initMaps();
+poll(); // once right away
+setInterval(poll, POLL_MS); // then every few seconds
