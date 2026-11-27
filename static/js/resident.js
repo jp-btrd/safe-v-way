@@ -23,6 +23,7 @@ let mainMap = null;
 let reportMap = null;
 
 let zoneLayer, blockedLayer, routeLayer, reportLayer;
+let hazardLayer, liveHazardLayer, pastFireLayer, hazBldgLayer;
 let reportMarker = null;
 let startMarker = null;
 
@@ -369,6 +370,11 @@ async function poll() {
       lastVersion = s.version;
       renderZones(s.zones);
       renderBlocked(s.blocked);
+      
+      if (s.hazard_zones) renderHazardZones(s.hazard_zones);
+      if (s.live_hazards) renderLiveHazards(s.live_hazards);
+      if (s.haz_bldgs) renderHazBldgs(s.haz_bldgs);
+      
       if (!firstLoad && lastClick && !isMapViewOnly) requestRoute(lastClick, true);
     }
   } catch (err) {
@@ -495,6 +501,7 @@ async function submitReport(ev) {
 
     if (data.ok) {
       showToast("Report sent. Routing to nearest safe zone...", false);
+      setTimeout(poll, 500);
       goToMapView(userGpsCoords, null, false);
     } else {
       showReportError(data.message || "Could not send the report.");
@@ -508,6 +515,57 @@ async function submitReport(ev) {
   }
 }
 
+function renderHazardZones(hazards) {
+  if (!hazardLayer) return;
+  hazardLayer.clearLayers();
+  
+  hazards.forEach(z => {
+    let color = "#0A7A4A"; 
+    if (z.level === "Moderate") color = "#F4B000"; 
+    if (z.level === "High") color = "#C4161C";
+
+    L.circle([z.lat, z.lon], {
+      radius: z.radius,
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.25,
+      weight: 2,
+      dashArray: "4 4"
+    }).bindPopup(`<b>${esc(z.name)}</b><br>Hazard Level: <b style="color:${color}">${z.level}</b>`).addTo(hazardLayer);
+  });
+}
+
+function renderLiveHazards(hazards) {
+  if (!liveHazardLayer) return;
+  liveHazardLayer.clearLayers();
+  pastFireLayer.clearLayers();
+  
+  hazards.forEach(h => {
+    if (h.status === "active" || h.status === "pending") {
+      let iconUrl = h.type === "fire" ? "/static/assets/fire.png" : "/static/assets/obstruction.png";
+      let icon = L.icon({ iconUrl: iconUrl, iconSize: [32, 32], iconAnchor: [16, 16] });
+      
+      L.marker([h.lat, h.lon], { icon })
+        .bindPopup(`<b>${esc(h.type ? h.type.toUpperCase() : "HAZARD")}</b><br>${esc(h.description)}`)
+        .addTo(liveHazardLayer);
+    }
+      
+    if (h.type === "fire" && h.status === "resolved") {
+      L.marker([h.lat, h.lon], { icon: L.icon({ iconUrl: "/static/assets/pastfire.png", iconSize: [24, 24], iconAnchor: [12, 12] }) })
+        .addTo(pastFireLayer);
+    }
+  });
+}
+
+function renderHazBldgs(bldgs) {
+  if (!hazBldgLayer) return;
+  hazBldgLayer.clearLayers();
+  bldgs.forEach(b => {
+    L.marker([b.lat, b.lon], { icon: L.icon({ iconUrl: "/static/assets/hazardbldg.png", iconSize: [28, 28], iconAnchor: [14, 14] }) })
+      .addTo(hazBldgLayer);
+  });
+}
+
 // ---------- INITIALIZATION ----------
 function initMaps() {
   // main map
@@ -519,6 +577,10 @@ function initMaps() {
   zoneLayer = L.layerGroup().addTo(mainMap);
   blockedLayer = L.layerGroup().addTo(mainMap);
   routeLayer = L.layerGroup().addTo(mainMap);
+  hazardLayer = L.layerGroup().addTo(mainMap);
+  liveHazardLayer = L.layerGroup().addTo(mainMap);
+  pastFireLayer = L.layerGroup().addTo(mainMap);
+  hazBldgLayer = L.layerGroup().addTo(mainMap);
 
   mainMap.on("click", (e) => {
     if (isMapViewOnly) return;
@@ -542,6 +604,16 @@ function initMaps() {
 
   reportMap.on("click", (e) => {
     setReportSpot(e.latlng);
+  });
+  
+  $("toggle-hazard").addEventListener("change", (e) => {
+    if (e.target.checked) mainMap.addLayer(hazardLayer); else mainMap.removeLayer(hazardLayer);
+  });
+  $("toggle-pastfires").addEventListener("change", (e) => {
+    if (e.target.checked) mainMap.addLayer(pastFireLayer); else mainMap.removeLayer(pastFireLayer);
+  });
+  $("toggle-hazbldgs").addEventListener("change", (e) => {
+    if (e.target.checked) mainMap.addLayer(hazBldgLayer); else mainMap.removeLayer(hazBldgLayer);
   });
 }
 

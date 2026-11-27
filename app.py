@@ -21,6 +21,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from functools import wraps
+from calculate_density import get_building_density
 
 import networkx as nx
 import osmnx as ox
@@ -283,16 +284,20 @@ def api_route():
 
 @app.route("/api/state")
 def api_state():
-    """Everything the resident map needs in one call (used for polling in Step 6)."""
     with lock:
+        sync_counts_to_zones()
+        live_hazards = [r for r in reports if r["status"] in ("active", "resolved") or (r["status"] == "pending")]
+        
         return jsonify({
             "version": state["version"],
             "zones": [zone_public(z) for z in zones],
             "blocked": [{"u": b["u"], "v": b["v"], "name": b.get("name", ""),
                         "path": path_to_latlon([b["u"], b["v"]])}
                        for b in blocked_list],
+            "hazard_zones": hazard_zones,
+            "live_hazards": live_hazards,
+            "haz_bldgs": haz_bldgs
         })
-
 
 # ---------- TEMPORARY DEV TOOLS (no password; Steps 4 and 5 replace them with the real admin tools) ----------
 @app.route("/api/dev/block-middle")
@@ -391,7 +396,24 @@ def api_submit_report():
         photo_name = f"{uuid.uuid4().hex}.{ext}"
         photo.save(os.path.join(UPLOAD_DIR, photo_name))
 
-    # 4) Add the report, status "pending"
+    # 4) Read the new fields (type and user GPS)
+    report_type = request.form.get("type", "fire")
+    user_lat = request.form.get("user_lat")
+    user_lon = request.form.get("user_lon")
+    
+    if user_lat:
+        try:
+            user_lat = round(float(user_lat), 6)
+        except ValueError:
+            user_lat = None
+            
+    if user_lon:
+        try:
+            user_lon = round(float(user_lon), 6)
+        except ValueError:
+            user_lon = None
+
+    # 5) add the report, status "pending"
     with lock:
         report = {
             "id": max((r["id"] for r in reports), default=0) + 1,
@@ -401,9 +423,13 @@ def api_submit_report():
             "photo": photo_name,
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "type": report_type,
+            "user_lat": user_lat,
+            "user_lon": user_lon
         }
         reports.append(report)
         save_json(REPORTS_PATH, reports)
+        bump_version()
 
     return jsonify(ok=True, id=report["id"], message="Report received. An admin will review it."), 201
 
@@ -419,6 +445,57 @@ def serve_upload(filename):
 def dev_reports():
     with lock:
         return jsonify(reports)
+
+# ---------- HAZARD ZONES & HAZARDOUS BUILDINGS ----------
+HAZARDS_PATH = os.path.join(DATA_DIR, "hazard_zones.json")
+HAZ_BLDGS_PATH = os.path.join(DATA_DIR, "hazardous_buildings.json")
+
+hazard_zones = load_json(HAZARDS_PATH, [])
+haz_bldgs = load_json(HAZ_BLDGS_PATH, [])
+
+def calculate_hazard_level(zone):
+    score = 0
+    
+    if zone.get("materials") == "Mixed": score += 2
+    elif zone.get("materials") == "Light": score += 4
+    
+    if zone.get("accessibility") == "Moderate": score += 2
+    elif zone.get("accessibility") == "Low": score += 4
+    
+    if zone.get("density") == "Moderate": score += 2
+    elif zone.get("density") == "High": score += 4
+    
+    score += (zone.get("fire_count", 0) * 3)
+    score += (zone.get("hazbldg_count", 0) * 2)
+    
+    if score <= 5: return "Low", score
+    elif score <= 10: return "Moderate", score
+    else: return "High", score
+
+def sync_counts_to_zones():
+    """counts verified fires and hazardous buildings inside"""
+    global hazard_zones, haz_bldgs
+    for z in hazard_zones:
+        z["fire_count"] = 0
+        z["hazbldg_count"] = 0
+        
+    for r in reports:
+        if r.get("status") in ("active", "resolved") and r.get("type") == "fire":
+            for z in hazard_zones:
+                if haversine_m(r["lat"], r["lon"], z["lat"], z["lon"]) <= z["radius"]:
+                    z["fire_count"] += 1
+                    
+    for b in haz_bldgs:
+        for z in hazard_zones:
+            if haversine_m(b["lat"], b["lon"], z["lat"], z["lon"]) <= z["radius"]:
+                z["hazbldg_count"] += 1
+                    
+    for z in hazard_zones:
+        level, score = calculate_hazard_level(z)
+        z["level"] = level
+        z["score"] = score
+        
+    save_json(HAZARDS_PATH, hazard_zones)
 
 # ---------- ADMIN (hard-coded password; NOT real security) ----------
 def admin_required(fn):
@@ -476,7 +553,7 @@ def admin_reports():
 @app.route("/api/admin/reports/<int:report_id>/<action>", methods=["POST"])
 @admin_required
 def admin_review_report(report_id, action):
-    """action is 'approve' or 'reject'. Only pending reports can be reviewed."""
+    """action is 'approve' or 'reject'."""
     if action not in ("approve", "reject"):
         return jsonify(ok=False, message="Unknown action."), 404
     with lock:
@@ -485,12 +562,57 @@ def admin_review_report(report_id, action):
                 if r["status"] != "pending":
                     return jsonify(ok=False, error="already_reviewed",
                                    message="This report was already reviewed."), 409
-                r["status"] = "approved" if action == "approve" else "rejected"
+                r["status"] = "active" if action == "approve" else "rejected"
                 r["reviewed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 save_json(REPORTS_PATH, reports)
+                bump_version()
                 return jsonify(ok=True, report=r)
     return jsonify(ok=False, message="No such report."), 404
 
+@app.route("/api/admin/reports/<int:report_id>/verify-fire", methods=["POST"])
+@admin_required
+def admin_verify_fire(report_id):
+    """Admin approves a fire and can update its lat/lon."""
+    data = request.get_json(silent=True) or {}
+    with lock:
+        for r in reports:
+            if r["id"] == report_id:
+                if r["status"] != "pending":
+                    return jsonify(ok=False, message="Report already reviewed."), 400
+                r["status"] = "active"
+                r["reviewed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                if "lat" in data and "lon" in data:
+                    r["lat"] = round(float(data["lat"]), 6)
+                    r["lon"] = round(float(data["lon"]), 6)
+                save_json(REPORTS_PATH, reports)
+                bump_version()
+                return jsonify(ok=True, report=r)
+    return jsonify(ok=False, message="No such report."), 404
+
+@app.route("/api/admin/reports/<int:report_id>/resolve", methods=["POST"])
+@admin_required
+def admin_resolve_report(report_id):
+    """Marks an active report as resolved/extinguished/cleared."""
+    with lock:
+        for r in reports:
+            if r["id"] == report_id:
+                if r["status"] != "active":
+                    return jsonify(ok=False, message="Only active reports can be resolved."), 400
+                
+                r["status"] = "resolved"
+                r["resolved_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                
+                if r.get("type") == "obstruction" and r.get("blocked_edge"):
+                    u, v = r["blocked_edge"]
+                    global blocked_list
+                    blocked_list[:] = [b for b in blocked_list if {b["u"], b["v"]} != {u, v}]
+                    rebuild_blocked_set()
+                    save_json(BLOCKED_PATH, blocked_list)
+                
+                save_json(REPORTS_PATH, reports)
+                bump_version()
+                return jsonify(ok=True, report=r)
+    return jsonify(ok=False, message="No such report."), 404
 
 @app.route("/api/admin/zones/<int:zone_id>/occupancy", methods=["POST"])
 @admin_required
@@ -531,6 +653,108 @@ def admin_zone_full(zone_id):
         return jsonify(ok=True, zone=zone_public(z))
 
 # ---------- ADMIN: BLOCK / UNBLOCK STREETS ----------
+@app.route("/api/admin/hazards", methods=["POST"])
+@admin_required
+def admin_add_hazard():
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        radius = float(data["radius"])
+        name = str(data["name"])
+        materials = str(data["materials"])
+        accessibility = str(data["accessibility"])
+        density = str(data["density"])
+    except (KeyError, ValueError, TypeError):
+        return jsonify(ok=False, message="missing / invalid fields"), 400
+
+    new_zone = {
+        "id": max((z["id"] for z in hazard_zones), default=0) + 1,
+        "name": name,
+        "lat": round(lat, 6),
+        "lon": round(lon, 6),
+        "radius": int(radius),
+        "materials": materials,
+        "accessibility": accessibility,
+        "density": density,
+        "fire_count": 0,
+        "hazbldg_count": 0,
+        "level": "Low",
+        "score": 0
+    }
+    
+    with lock:
+        hazard_zones.append(new_zone)
+        sync_counts_to_zones()
+        bump_version()
+        
+    return jsonify(ok=True, zone=new_zone)
+
+@app.route("/api/admin/hazards/<int:zone_id>", methods=["PUT"])
+@admin_required
+def admin_edit_hazard(zone_id):
+    data = request.get_json(silent=True) or {}
+    with lock:
+        for z in hazard_zones:
+            if z["id"] == zone_id:
+                z["name"] = str(data.get("name", z["name"]))
+                z["radius"] = int(data.get("radius", z["radius"]))
+                z["materials"] = str(data.get("materials", z["materials"]))
+                z["accessibility"] = str(data.get("accessibility", z["accessibility"]))
+                z["density"] = str(data.get("density", z["density"]))
+                
+                if "lat" in data and "lon" in data:
+                    z["lat"] = float(data["lat"])
+                    z["lon"] = float(data["lon"])
+
+                sync_counts_to_zones()
+                bump_version()
+                return jsonify(ok=True, zone=z)
+    return jsonify(ok=False, message="No such zone."), 404
+
+@app.route("/api/admin/hazards/<int:zone_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_hazard(zone_id):
+    with lock:
+        hazard_zones[:] = [z for z in hazard_zones if z["id"] != zone_id]
+        save_json(HAZARDS_PATH, hazard_zones)
+        bump_version()
+    return jsonify(ok=True)
+
+@app.route("/api/admin/hazbldgs", methods=["POST"])
+@admin_required
+def admin_add_hazbldg():
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+    except (KeyError, ValueError, TypeError):
+        return jsonify(ok=False, message="missing coordinates"), 400
+
+    new_bldg = {
+        "id": max((b["id"] for b in haz_bldgs), default=0) + 1,
+        "lat": round(lat, 6),
+        "lon": round(lon, 6)
+    }
+    
+    with lock:
+        haz_bldgs.append(new_bldg)
+        save_json(HAZ_BLDGS_PATH, haz_bldgs)
+        sync_counts_to_zones()
+        bump_version()
+        
+    return jsonify(ok=True, bldg=new_bldg)
+
+@app.route("/api/admin/hazbldgs/<int:bldg_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_hazbldg(bldg_id):
+    with lock:
+        haz_bldgs[:] = [b for b in haz_bldgs if b["id"] != bldg_id]
+        save_json(HAZ_BLDGS_PATH, haz_bldgs)
+        sync_counts_to_zones()
+        bump_version()
+    return jsonify(ok=True)
+
 MAX_BLOCK_SNAP_M = 40      # the admin's click must be within 40 m of a mapped street piece
 
 # Every street piece (edge) with its shape, built once at startup.

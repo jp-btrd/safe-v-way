@@ -41,29 +41,116 @@
     <h2>Safe zones</h2>
     <div id="zones"></div>
 
-    <h2>Pending reports <span id="pending-count" class="badge">0</span></h2>
-    <div id="pending"></div>
+    <h2>Pending Fire Reports <span id="pending-fire-count" class="badge">0</span></h2>
+    <div id="pending-fires"></div>
+
+    <h2>Pending Obstruction Reports <span id="pending-obs-count" class="badge">0</span></h2>
+    <div id="pending-obstructions"></div>
+
+    <h2>Active Fires</h2>
+    <div id="active-fires"></div>
+
+    <h2>Active Obstructions</h2>
+    <div id="active-obstructions"></div>
 
     <h2>Blocked streets</h2>
     <div id="blocked"></div>
 
-    <h2>Reviewed reports</h2>
+    <h2>Hazard Zones</h2>
+    <div class="btn-row" style="margin-bottom: 12px;">
+      <button id="btn-add-zone" class="primary">+ Draw Hazard Zone</button>
+      <button id="btn-add-hazbldg" class="danger">+ Mark Hazardous Building</button>
+    </div>
+    <div id="hazard-list"></div>
+    
+    <h2>Hazardous Buildings</h2>
+    <div id="hazbldg-list"></div>
+
+    <div id="hazard-sidebar" class="hazard-sidebar" hidden>
+      <div class="sidebar-header">
+        <h3 id="sidebar-title">New Hazard Zone</h3>
+        <button id="sidebar-close" class="danger" style="min-height: 40px; padding: 0 10px;">X</button>
+      </div>
+      <p class="meta" style="margin-bottom: 12px;">Click anywhere on the map to place the center point.</p>
+      <form id="zone-form">
+        <label>Zone Name</label>
+        <input type="text" id="z-name" required>
+        
+        <label>Radius (meters)</label>
+        <input type="number" id="z-radius" value="100" min="20" max="500" required>
+        
+        <label>Building Density Level</label>
+        <select id="z-density">
+          <option value="Low">Low</option>
+          <option value="Moderate">Moderate</option>
+          <option value="High">High</option>
+        </select>
+
+        <label>Building Materials</label>
+        <select id="z-materials">
+          <option value="Concrete">Concrete</option>
+          <option value="Mixed">Mixed</option>
+          <option value="Light">Light/Flammable</option>
+        </select>
+        
+        <label>Fire Truck Accessibility</label>
+        <select id="z-access">
+          <option value="High">High</option>
+          <option value="Moderate">Moderate</option>
+          <option value="Low">Low</option>
+        </select>
+
+        <input type="hidden" id="edit-zone-id" value="">
+
+        <div class="btn-row" style="margin-top: 20px;">
+          <button type="submit" class="primary">Save Zone</button>
+          <button type="button" id="z-cancel" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <h2>Past Incidents & Rejected Reports</h2>
     <div id="reviewed"></div>
   </main>
 
-    <!-- Full-screen map used after "Approve and block street" -->
-  <div id="block-modal" hidden>
-    <div id="block-top">
-      <b>Approve and block a street</b>
-      <p id="block-desc" class="meta"></p>
-      <img id="block-photo" class="block-photo" alt="" hidden>
+  <div id="block-modal" class="modal-overlay" hidden>
+    <div class="modal-content" style="max-width: 800px; height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="display: flex; flex-direction: column; align-items: stretch; gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <b>Verify & Block Street</b>
+          <button id="block-cancel" class="danger" style="min-height: 40px; padding: 0 10px;">Cancel</button>
+        </div>
+        <p id="block-desc" class="meta" style="margin: 0;"></p>
+        <img id="block-photo" class="block-photo" alt="" hidden style="max-height: 80px; align-self: flex-start; border-radius: 4px;">
+      </div>
+      <div id="block-map" style="flex: 1; border-radius: 0 0 8px 8px;"></div>
+      <div style="padding-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <p id="block-info" class="meta" style="margin: 0; font-weight: bold;"></p>
+        <button id="block-confirm" type="button" class="primary" disabled>Confirm &amp; Block Street</button>
+      </div>
     </div>
-    <div id="block-map"></div>
-    <div id="block-bottom">
-      <p id="block-info"></p>
-      <div class="btn-row">
-        <button id="block-confirm" type="button" class="danger" disabled>Approve &amp; block this street</button>
-        <button id="block-cancel" type="button">Cancel</button>
+  </div>
+
+  <div id="draw-zone-modal" class="modal-overlay" hidden>
+    <div class="modal-content" style="max-width: 800px; height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <b id="draw-map-title">Draw Hazard Zone</b>
+        <button id="draw-map-cancel" class="danger" style="min-height: 40px;">Cancel</button>
+      </div>
+      <div id="draw-map" style="flex: 1; border-radius: 0 0 8px 8px;"></div>
+    </div>
+  </div>
+
+  <div id="verify-fire-modal" class="modal-overlay" hidden>
+    <div class="modal-content" style="max-width: 800px; height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <b>Verify Fire Location</b>
+        <button id="verify-fire-cancel" class="danger" style="min-height: 40px;">Cancel</button>
+      </div>
+      <div id="verify-fire-map" style="flex: 1; border-radius: 0 0 8px 8px;"></div>
+      <div style="padding-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <p class="meta" style="margin: 0;">tapf the map to adjust the exact location of the fire</p>
+        <button id="verify-fire-confirm" class="primary">Confirm &amp; Verify Fire</button>
       </div>
     </div>
   </div>
@@ -71,6 +158,6 @@
   <div id="toast" hidden></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/static/js/admin.js"></script>
+  <script src="/static/js/admin.js" defer></script>
 </body>
 </html>

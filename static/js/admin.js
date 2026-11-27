@@ -142,57 +142,116 @@ function reportCard(r) {
   const photo = r.photo
     ? `<img class="report-photo" src="/uploads/${esc(r.photo)}" alt="Report photo">`
     : `<div class="meta">(no photo)</div>`;
+  const typeStr = r.type === "fire" ? "FIRE" : "OBSTRUCTION";
 
   if (r.status === "pending") {
+    let buttons = "";
+    if (r.type === "fire") {
+      buttons = `
+        <button class="primary" data-report="${r.id}" data-action="verify-fire">Verify Fire</button>
+        <button class="danger" data-report="${r.id}" data-action="reject">Reject</button>`;
+    } else {
+      buttons = `
+        <button class="primary" data-report="${r.id}" data-action="block">Verify &amp; Block Street</button>
+        <button class="danger" data-report="${r.id}" data-action="reject">Reject</button>`;
+    }
+    
     return `
       <div class="card pending">
-        <h3>Report #${r.id}</h3>
+        <h3>Report #${r.id} <span class="status-pill pending" style="background:#F4B000;color:#fff;">${typeStr}</span></h3>
         <div class="meta">${esc(when)}. ${r.lat}, ${r.lon}</div>
         ${photo}
         <p>${esc(r.description)}</p>
-        <div class="btn-row">
-          <button class="primary" data-report="${r.id}" data-action="block">Approve &amp; block street</button>
-          <button data-report="${r.id}" data-action="approve">Approve only</button>
-          <button class="danger" data-report="${r.id}" data-action="reject">Reject</button>
-        </div>
+        <div class="btn-row">${buttons}</div>
       </div>`;
   }
+  
+  let resolveBtn = "";
+  if (r.status === "active") {
+    const label = r.type === "fire" ? "Mark Extinguished" : "Mark Cleared";
+    resolveBtn = `<div class="btn-row" style="margin-top: 10px;">
+      <button class="primary" data-report="${r.id}" data-action="resolve">${label}</button>
+    </div>`;
+  }
+
+  let badgeText = r.status;
+  if (r.status === "rejected") badgeText = "Rejected";
+  if (r.status === "resolved") badgeText = r.type === "fire" ? "Extinguished" : "Cleared";
+
   return `
     <div class="card">
-      <h3>Report #${r.id} <span class="status-pill ${esc(r.status)}">${esc(r.status)}</span></h3>
+      <h3>Report #${r.id} <span class="status-pill ${esc(r.status)}">${typeStr} - ${badgeText}</span></h3>
       <div class="meta">${esc(when)}. ${r.lat}, ${r.lon}</div>
       <p>${esc(r.description)}</p>
+      ${resolveBtn}
     </div>`;
 }
 
 function renderReports(reports) {
-  const pending = reports.filter((r) => r.status === "pending");
-  const reviewed = reports.filter((r) => r.status !== "pending");
-  $("pending-count").textContent = pending.length;
-  $("pending").innerHTML = pending.length
-    ? pending.map(reportCard).join("")
-    : '<p class="empty">No pending reports.</p>';
-  $("reviewed").innerHTML = reviewed.length
-    ? reviewed.map(reportCard).join("")
-    : '<p class="empty">Nothing reviewed yet.</p>';
+  const pendingFires = reports.filter((r) => r.status === "pending" && r.type === "fire");
+  const pendingObs = reports.filter((r) => r.status === "pending" && r.type !== "fire");
+  const activeFires = reports.filter((r) => r.status === "active" && r.type === "fire");
+  const activeObs = reports.filter((r) => r.status === "active" && r.type === "obstruction");
+  const past = reports.filter((r) => r.status === "resolved" || r.status === "rejected");
+  
+  $("pending-fire-count").textContent = pendingFires.length;
+  $("pending-obs-count").textContent = pendingObs.length;
+  
+  $("pending-fires").innerHTML = pendingFires.length ? pendingFires.map(reportCard).join("") : '<p class="empty">No pending fires.</p>';
+  $("pending-obstructions").innerHTML = pendingObs.length ? pendingObs.map(reportCard).join("") : '<p class="empty">No pending obstructions.</p>';
+  $("active-fires").innerHTML = activeFires.length ? activeFires.map(reportCard).join("") : '<p class="empty">No active fires.</p>';
+  $("active-obstructions").innerHTML = activeObs.length ? activeObs.map(reportCard).join("") : '<p class="empty">No active obstructions.</p>';
+  $("reviewed").innerHTML = past.length ? past.map(reportCard).join("") : '<p class="empty">Nothing reviewed yet.</p>';
 }
 
-$("pending").addEventListener("click", async (e) => {
-  const b = e.target.closest("button");
-  if (!b || !b.dataset.report) return;
-  if (b.dataset.action === "block") { openBlockModal(Number(b.dataset.report)); return; }
-  b.disabled = true;
-  try {
-    const data = await api(`/api/admin/reports/${b.dataset.report}/${b.dataset.action}`, "POST");
-    if (data.ok) {
-      showToast(b.dataset.action === "approve" ? "Report approved." : "Report rejected.", false);
-    } else {
-      showToast(data.message || "Could not review the report.", true);
+function renderReports(reports) {
+  const pendingFires = reports.filter((r) => r.status === "pending" && r.type === "fire");
+  const pendingObs = reports.filter((r) => r.status === "pending" && r.type !== "fire");
+  const activeFires = reports.filter((r) => r.status === "active" && r.type === "fire");
+  const activeObs = reports.filter((r) => r.status === "active" && r.type !== "fire");
+  const past = reports.filter((r) => r.status === "resolved" || r.status === "rejected");
+  
+  if ($("pending-fire-count")) $("pending-fire-count").textContent = pendingFires.length;
+  if ($("pending-obs-count")) $("pending-obs-count").textContent = pendingObs.length;
+  
+  if ($("pending-fires")) $("pending-fires").innerHTML = pendingFires.length ? pendingFires.map(reportCard).join("") : '<p class="empty">No pending fires.</p>';
+  if ($("pending-obstructions")) $("pending-obstructions").innerHTML = pendingObs.length ? pendingObs.map(reportCard).join("") : '<p class="empty">No pending obstructions.</p>';
+  
+  if ($("active-fires")) $("active-fires").innerHTML = activeFires.length ? activeFires.map(reportCard).join("") : '<p class="empty">No active fires.</p>';
+  if ($("active-obstructions")) $("active-obstructions").innerHTML = activeObs.length ? activeObs.map(reportCard).join("") : '<p class="empty">No active obstructions.</p>';
+  
+  if ($("reviewed")) $("reviewed").innerHTML = past.length ? past.map(reportCard).join("") : '<p class="empty">Nothing reviewed yet.</p>';
+}
+
+document.querySelectorAll("#pending-fires, #pending-obstructions, #active-fires, #active-obstructions, #reviewed").forEach(container => {
+  container.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b || !b.dataset.report) return;
+    if (b.dataset.action === "block") { 
+      openBlockModal(Number(b.dataset.report)); 
+      return; 
     }
-    await refresh();
-  } catch (err) {
-    if (err.message !== "unauthorized") showToast("Could not reach the server.", true);
-  }
+    if (b.dataset.action === "verify-fire") {
+      openVerifyFireModal(Number(b.dataset.report));
+      return;
+    }
+    
+    b.disabled = true;
+    try {
+      let endpoint = `/api/admin/reports/${b.dataset.report}/${b.dataset.action}`;
+      if (b.dataset.action === "resolve") endpoint = `/api/admin/reports/${b.dataset.report}/resolve`;
+      
+      const data = await api(endpoint, "POST");
+      if (data.ok) {
+        showToast("Report updated.", false);
+      } else {
+        showToast(data.message || "Could not update.", true);
+      }
+      await refresh();
+    } catch (err) {
+      if (err.message !== "unauthorized") showToast("Could not reach the server.", true);
+    }
+  });
 });
 
 // ---------- Fetch + redraw (runs every POLL_MS) ----------
@@ -216,6 +275,9 @@ async function refresh() {
 
     const bj = JSON.stringify(state.blocked);
     if (bj !== lastBlockedJson) { lastBlockedJson = bj; renderBlocked(state.blocked); }
+  
+    renderHazardList(state.hazard_zones);
+    renderHazBldgList(state.haz_bldgs);
   } catch (err) {
     if (err.message !== "unauthorized") $("conn").textContent = "Server unreachable, retrying...";
   }
@@ -285,6 +347,60 @@ function openBlockModal(reportId) {
   drawBlockMap();
 }
 
+// ----- Fire Verification Map -----
+let vfMap = null, vfLayers = null, vfReport = null, vfMarker = null;
+
+function openVerifyFireModal(reportId) {
+  vfReport = currentReports.find((r) => r.id === reportId);
+  if (!vfReport) return;
+  
+  $("verify-fire-modal").hidden = false;
+
+  if (!vfMap) {
+    vfMap = L.map("verify-fire-map");
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+    }).addTo(vfMap);
+    vfLayers = L.layerGroup().addTo(vfMap);
+    
+    vfMap.on("click", (e) => {
+      if (vfMarker) vfMap.removeLayer(vfMarker);
+      vfMarker = L.marker(e.latlng).addTo(vfMap);
+      vfMarker.latlng = e.latlng;
+    });
+  }
+  
+  vfMap.setView([vfReport.lat, vfReport.lon], 18);
+  setTimeout(() => vfMap.invalidateSize(), 50);
+  
+  vfLayers.clearLayers();
+  vfMarker = L.marker([vfReport.lat, vfReport.lon]).addTo(vfMap);
+  vfMarker.latlng = { lat: vfReport.lat, lng: vfReport.lon };
+}
+
+$("verify-fire-cancel").addEventListener("click", () => {
+  $("verify-fire-modal").hidden = true;
+});
+
+$("verify-fire-confirm").addEventListener("click", async () => {
+  if (!vfMarker || !vfMarker.latlng) return;
+  const lat = vfMarker.latlng.lat;
+  const lon = vfMarker.latlng.lng;
+  
+  try {
+    const data = await api(`/api/admin/reports/${vfReport.id}/verify-fire`, "POST", { lat, lon });
+    if (data.ok) {
+      $("verify-fire-modal").hidden = true;
+      showToast("fire verified and marked active", false);
+      await refresh();
+    } else {
+      alert(data.message);
+    }
+  } catch (err) {
+    alert("Could not verify fire.");
+  }
+});
+
 async function drawBlockMap() {
   bLayers.clearLayers();
   // already blocked streets (red)
@@ -338,3 +454,215 @@ $("block-confirm").addEventListener("click", async () => {
 });
 
 $("block-cancel").addEventListener("click", () => { $("block-modal").hidden = true; });
+
+// HAZARD ZONES & HAZARDOUS BUILDINGS
+let drawMap = null;
+let drawLayers = null;
+let pendingLatLng = null;
+let hazardMode = null; 
+let editingZoneId = null;
+
+function renderHazardList(zones) {
+  const list = $("hazard-list");
+  if (!list) return;
+  if (!zones || zones.length === 0) {
+    list.innerHTML = '<p class="empty">No hazard zones defined.</p>';
+    return;
+  }
+  
+  list.innerHTML = zones.map(z => {
+    let color = "#0A7A4A";
+    if (z.level === "Moderate") color = "#F4B000";
+    if (z.level === "High") color = "#C4161C";
+    
+    return `
+      <div class="card">
+        <h3><span style="display:inline-block;width:12px;height:12px;background:${color};border-radius:50%;margin-right:8px;"></span>${esc(z.name)}</h3>
+        <div class="meta">Level: <b>${z.level}</b> (Score: ${z.score}) | Radius: ${z.radius}m</div>
+        <div class="meta">Materials: ${z.materials} | Access: ${z.accessibility} | Density: ${z.density}</div>
+        <div class="meta" style="margin-top:4px;">Historical Fires: ${z.fire_count} | Haz. Buildings: ${z.hazbldg_count}</div>
+        <div class="btn-row" style="margin-top: 8px;">
+          <button class="primary" onclick="editZone(${z.id})">Edit</button>
+          <button class="danger" onclick="deleteZone(${z.id})">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderHazBldgList(bldgs) {
+  const list = $("hazbldg-list");
+  if (!list) return;
+  if (!bldgs || bldgs.length === 0) {
+    list.innerHTML = '<p class="empty">No hazardous buildings marked.</p>';
+    return;
+  }
+  
+  list.innerHTML = bldgs.map(b => `
+    <div class="card closed">
+      <h3>Hazardous Building #${b.id}</h3>
+      <div class="meta">${b.lat}, ${b.lon}</div>
+      <div class="btn-row"><button class="danger" onclick="deleteHazBldg(${b.id})">Remove Building</button></div>
+    </div>
+  `).join('');
+}
+
+window.deleteZone = async (id) => {
+  if (!confirm("Delete this hazard zone?")) return;
+  await api(`/api/admin/hazards/${id}`, "DELETE");
+  await refresh();
+};
+
+window.editZone = async (id) => {
+  fetch("/api/state").then(r => r.json()).then(s => {
+    const z = s.hazard_zones.find(x => x.id === id);
+    if (!z) return;
+    
+    editingZoneId = z.id;
+    pendingLatLng = { lat: z.lat, lng: z.lon };
+    
+    $("sidebar-title").textContent = "Edit Hazard Zone";
+    $("z-name").value = z.name;
+    $("z-radius").value = z.radius;
+    $("z-density").value = z.density;
+    $("z-materials").value = z.materials;
+    $("z-access").value = z.accessibility;
+    
+    $("draw-zone-modal").hidden = false;
+    
+    setTimeout(() => {
+      initDrawMap();
+      drawMap.invalidateSize();
+      drawMap.setView([z.lat, z.lon], 17);
+      drawLayers.clearLayers();
+      L.circle([z.lat, z.lon], { radius: z.radius, color: "#0B5CAD", fillOpacity: 0.2 }).addTo(drawLayers);
+      L.marker([z.lat, z.lon]).addTo(drawLayers);
+      
+      $("hazard-sidebar").hidden = false;
+    }, 50);
+  });
+};
+
+window.deleteHazBldg = async (id) => {
+  if (!confirm("Remove this hazardous building marker?")) return;
+  await api(`/api/admin/hazbldgs/${id}`, "DELETE");
+  await refresh();
+};
+
+function initDrawMap() {
+  if (drawMap) return;
+  drawMap = L.map("draw-map").setView([14.684443, 120.990409], 16);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+  }).addTo(drawMap);
+  drawLayers = L.layerGroup().addTo(drawMap);
+
+  drawMap.on("click", async (e) => {
+    if (hazardMode === 'bldg') {
+      const res = await api("/api/admin/hazbldgs", "POST", { lat: e.latlng.lat, lon: e.latlng.lng });
+      if (res.ok) {
+        showToast("Hazardous building marked.", false);
+        $("draw-zone-modal").hidden = true;
+        await refresh();
+      }
+      return;
+    }
+
+    pendingLatLng = e.latlng;
+    drawLayers.clearLayers();
+    
+    const radius = parseInt($("z-radius").value) || 100;
+    L.circle(pendingLatLng, { radius: radius, color: "#0B5CAD", fillOpacity: 0.2 }).addTo(drawLayers);
+    L.marker(pendingLatLng).addTo(drawLayers);
+    
+    $("hazard-sidebar").hidden = false;
+    $("sidebar-title").textContent = editingZoneId ? "Edit Hazard Zone" : "New Hazard Zone";
+  });
+}
+
+$("btn-add-zone").addEventListener("click", () => {
+  hazardMode = 'zone';
+  pendingLatLng = null;
+  editingZoneId = null;
+  
+  // Reset form
+  $("zone-form").reset();
+  $("edit-zone-id").value = "";
+  
+  $("draw-map-title").textContent = "Draw Hazard Zone";
+  $("draw-zone-modal").hidden = false;
+  $("hazard-sidebar").hidden = true;
+  
+  setTimeout(() => {
+    initDrawMap();
+    drawMap.invalidateSize();
+    drawLayers.clearLayers();
+  }, 50);
+});
+
+$("btn-add-hazbldg").addEventListener("click", () => {
+  hazardMode = 'bldg';
+  $("draw-map-title").textContent = "Mark Hazardous Building";
+  $("draw-zone-modal").hidden = false;
+  
+  setTimeout(() => {
+    initDrawMap();
+    drawMap.invalidateSize();
+    drawLayers.clearLayers();
+  }, 50);
+});
+
+$("draw-map-cancel").addEventListener("click", () => {
+  $("draw-zone-modal").hidden = true;
+});
+
+$("sidebar-close").addEventListener("click", () => {
+  $("hazard-sidebar").hidden = true;
+});
+
+$("z-radius").addEventListener("input", (e) => {
+  if (!pendingLatLng || !drawLayers) return;
+  drawLayers.clearLayers();
+  const radius = parseInt(e.target.value) || 100;
+  L.circle(pendingLatLng, { radius: radius, color: "#0B5CAD", fillOpacity: 0.2 }).addTo(drawLayers);
+  L.marker(pendingLatLng).addTo(drawLayers);
+});
+
+$("zone-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!pendingLatLng) return alert("click the map to set the center first");
+
+  const payload = {
+    lat: pendingLatLng.lat,
+    lon: pendingLatLng.lng,
+    name: $("z-name").value,
+    radius: $("z-radius").value,
+    density: $("z-density").value,
+    materials: $("z-materials").value,
+    accessibility: $("z-access").value
+  };
+
+  try {
+    let res;
+    if (editingZoneId) {
+      res = await api(`/api/admin/hazards/${editingZoneId}`, "PUT", payload);
+    } else {
+      res = await api("/api/admin/hazards", "POST", payload);
+    }
+
+    if (res.ok) {
+      $("draw-zone-modal").hidden = true;
+      $("hazard-sidebar").hidden = true;
+      showToast(editingZoneId ? "zone updated" : "zone added", false);
+      await refresh();
+    } else {
+      alert(res.message);
+    }
+  } catch (err) {
+    alert("failed to save zone");
+  }
+});
+
+$("z-cancel").addEventListener("click", () => {
+  $("draw-zone-modal").hidden = true;
+});
